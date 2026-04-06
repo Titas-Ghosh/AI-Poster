@@ -156,6 +156,60 @@ def api_compare():
     })
 
 
+@app.route("/api/graph-data", methods=["POST"])
+def api_graph_data():
+    """Return A* expansion history + graph layout for live visualization."""
+    data = request.json
+    mode = data.get("mode", "word")
+    start = _norm(data.get("start", ""), mode)
+    goal = _norm(data.get("goal", ""), mode)
+    seq_length = int(data.get("seq_length", 4))
+    graph = _graph(mode, seq_length)
+
+    result = astar(graph, start, goal)
+    if not result.expansion_history:
+        return jsonify({"error": "No expansion data available."}), 400
+
+    # Collect all nodes from history
+    all_nodes = set()
+    for step in result.expansion_history:
+        all_nodes.update(step["closed_set"])
+        all_nodes.update(step["open_set"])
+        all_nodes.add(step["current"])
+
+    # Build unique edges
+    edge_set = set()
+    for node in all_nodes:
+        for neighbor in graph.get_neighbors(node):
+            if neighbor in all_nodes:
+                edge_set.add(tuple(sorted([node, neighbor])))
+
+    # Compute layout with networkx
+    import networkx as nx
+    G = nx.Graph()
+    G.add_nodes_from(all_nodes)
+    G.add_edges_from(edge_set)
+    pos = nx.kamada_kawai_layout(G)
+
+    # Normalize positions to 0-1
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    rx = max(xs) - min(xs) or 1
+    ry = max(ys) - min(ys) or 1
+    mx, my = min(xs), min(ys)
+    positions = {n: [round((p[0] - mx) / rx, 4), round((p[1] - my) / ry, 4)]
+                 for n, p in pos.items()}
+
+    return jsonify({
+        "positions": positions,
+        "edges": [list(e) for e in edge_set],
+        "history": result.expansion_history,
+        "path": result.path,
+        "start": start,
+        "goal": goal,
+    })
+
+
 @app.route("/output/<path:filename>")
 def serve_output(filename):
     return send_from_directory("output", filename)
